@@ -14,7 +14,7 @@ mcp = FastMCP(
 )
 
 # Import tools and services
-from src.tools.fda_tool import FDATool
+from src.tools.fda_tool import FDATool  # Keep original name for compatibility
 from src.tools.pubmed_tool import PubMedTool
 from src.tools.healthfinder_tool import HealthFinderTool
 from src.tools.clinical_trials_tool import ClinicalTrialsTool
@@ -33,9 +33,35 @@ usage_service = UsageService(db_path="healthcare_usage.db")
 session_id = str(uuid.uuid4())
 
 @mcp.tool()
+async def fda_device_lookup(ctx: Context, searchType: str, dateRange: int = 30, deviceName: str = None, eventType: str = "all"):
+    """
+    Look up device information from the FDA MAUDE database
+    
+    Args:
+        searchType: Type of search - 'adverse_events', 'recalls', or 'safety_signals'
+        dateRange: Number of days to look back (default 30)
+        deviceName: Name of the device to search for (optional - searches all devices if not provided)
+        eventType: For adverse events: 'all', 'malfunction', 'injury', 'death'
+    """
+    # Record usage
+    usage_service.record_usage(session_id, "fda_device_lookup")
+    
+    # Create device parameters dictionary
+    device_params = {
+        'searchType': searchType,
+        'dateRange': dateRange,
+        'deviceName': deviceName,  # Changed from deviceModel
+        'eventType': eventType
+    }
+    
+    # Call the updated tool with device parameters
+    return await fda_tool.lookup_device(device_params)
+
+# Keep the old drug lookup function for backward compatibility
+@mcp.tool()
 async def fda_drug_lookup(ctx: Context, drug_name: str, search_type: str = "general"):
     """
-    Look up drug information from the FDA database
+    Look up drug information from the FDA database (deprecated - use fda_device_lookup for new features)
     
     Args:
         drug_name: Name of the drug to search for
@@ -44,8 +70,21 @@ async def fda_drug_lookup(ctx: Context, drug_name: str, search_type: str = "gene
     # Record usage
     usage_service.record_usage(session_id, "fda_drug_lookup")
     
-    # Call the tool
-    return await fda_tool.lookup_drug(drug_name, search_type)
+    # For backward compatibility, still call the old method if it exists
+    # This will need to be handled in your FDATool class
+    try:
+        if hasattr(fda_tool, 'lookup_drug'):
+            return await fda_tool.lookup_drug(drug_name, search_type)
+        else:
+            return {
+                "status": "error",
+                "error_message": "Drug lookup functionality has been replaced with device monitoring. Please use fda_device_lookup instead."
+            }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error_message": f"Error in drug lookup: {str(e)}"
+        }
 
 @mcp.tool()
 async def pubmed_search(ctx: Context, query: str, max_results: int = 5, date_range: str = ""):

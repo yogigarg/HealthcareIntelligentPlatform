@@ -10,6 +10,7 @@ import PubMedSearch from './components/tools/PubMedSearch';
 import HealthTopics from './components/tools/HealthTopics';
 import ICD10Lookup from './components/tools/ICD10Lookup';
 import MedicalTerminology from './components/tools/MedicalTerminology';
+import DeviceInformation from './components/tools/DeviceInformation'; // Updated import
 import mcpClient from './services/mcpClient';
 import agentFactory from './services/multiAgent';
 
@@ -27,10 +28,16 @@ function App() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showTester, setShowTester] = useState(false);
   
-  // Drug Info states
-  const [drugName, setDrugName] = useState('');
-  const [drugSearchType, setDrugSearchType] = useState('general');
-  const [drugResult, setDrugResult] = useState(null);
+  // Device Monitoring states (Updated from drug states)
+  const [deviceSearchParams, setDeviceSearchParams] = useState({
+    searchType: 'adverse_events',
+    dateRange: 30,
+    deviceName: '',  // Changed from deviceModel
+    eventType: 'all'
+  });
+  const [deviceResult, setDeviceResult] = useState(null);
+  const [deviceLoading, setDeviceLoading] = useState(false);
+  const [deviceError, setDeviceError] = useState(null);
   
   // Clinical Trials states
   const [condition, setCondition] = useState('');
@@ -101,10 +108,16 @@ function App() {
     setShowAdvanced(false);
     setShowTester(false);
     
-    // Clear drug info states
-    setDrugName('');
-    setDrugSearchType('general');
-    setDrugResult(null);
+    // Clear device monitoring states
+    setDeviceSearchParams({
+      searchType: 'adverse_events',
+      dateRange: 30,
+      deviceName: '',  // Changed from deviceModel
+      eventType: 'all'
+    });
+    setDeviceResult(null);
+    setDeviceLoading(false);
+    setDeviceError(null);
     
     // Clear clinical trials states
     setCondition('');
@@ -149,87 +162,60 @@ function App() {
     setLoading(false);
   };
 
-  const searchDrug = async () => {
-    if (!drugName.trim()) return;
-    
-    setLoading(true);
-    setDrugResult(null);
+  // Updated device search function (replaces searchDrug)
+  const searchDevices = async (searchParams) => {
+    setDeviceLoading(true);
+    setDeviceResult(null);
+    setDeviceError(null);
     
     try {
-      console.log('Searching for drug:', drugName, 'Type:', drugSearchType);
-      const response = await mcpClient.callTool('fda_drug_lookup', {
-        drug_name: drugName,
-        search_type: drugSearchType
-      });
-      console.log('Drug search response:', response);
+      console.log('Searching devices with params:', searchParams);
       
-      // Check if no results found or if there's an FDA API error
-      if ((response.status === 'success' && response.results && response.results.length === 0) ||
-          (response.error && response.error.includes('NOT_FOUND')) ||
-          (response.error_message && response.error_message.includes('404'))) {
-        // Use AI agent to provide information
-        console.log('No FDA data found, using AI agent...');
-        try {
-          const agentResponse = await agentFactory.routeQuery(
-            'fda_agent',
-            `Provide comprehensive information about ${drugName} including its uses, dosage, side effects, and warnings. Note that this information is AI-generated as the drug was not found in the FDA database.`
-          );
-          
-          setDrugResult({
-            status: 'ai_generated',
-            drug_name: drugName,
-            message: agentResponse.response,
-            source: 'AI Generated Information'
-          });
-        } catch (agentError) {
-          console.error('AI generation error:', agentError);
-          setDrugResult({ status: 'error', error_message: 'Drug not found in FDA database and AI generation failed.' });
-        }
-      } else if (response.status === 'error' || response.error || response.error_message) {
-        // Handle other errors by trying AI
-        console.log('FDA API error, using AI agent...');
-        try {
-          const agentResponse = await agentFactory.routeQuery(
-            'fda_agent',
-            `Provide comprehensive information about ${drugName} including its uses, dosage, side effects, and warnings. Note that this information is AI-generated as there was an issue accessing the FDA database.`
-          );
-          
-          setDrugResult({
-            status: 'ai_generated',
-            drug_name: drugName,
-            message: agentResponse.response,
-            source: 'AI Generated Information'
-          });
-        } catch (agentError) {
-          console.error('AI generation error:', agentError);
-          setDrugResult({ status: 'error', error_message: response.error_message || response.error || 'An error occurred' });
-        }
+      // Use the updated FDA device tool
+      let response;
+      
+      if (searchParams.searchType === 'adverse_events') {
+        response = await mcpClient.callTool('fda_device_lookup', {
+          searchType: 'adverse_events',
+          dateRange: searchParams.dateRange,
+          deviceName: searchParams.deviceName || null,  // Changed from deviceModel
+          eventType: searchParams.eventType
+        });
+      } else if (searchParams.searchType === 'recalls') {
+        response = await mcpClient.callTool('fda_device_lookup', {
+          searchType: 'recalls',
+          dateRange: searchParams.dateRange,
+          deviceName: searchParams.deviceName || null  // Changed from deviceModel
+        });
+      } else if (searchParams.searchType === 'safety_signals') {
+        response = await mcpClient.callTool('fda_device_lookup', {
+          searchType: 'safety_signals',
+          dateRange: searchParams.dateRange,
+          deviceName: searchParams.deviceName || null  // Changed from deviceModel
+        });
+      }
+      
+      console.log('Device search response:', response);
+      
+      if (response && response.status === 'success') {
+        setDeviceResult(response);
+      } else if (response && response.status === 'error') {
+        setDeviceError(response.error || response.error_message || 'An error occurred while searching for device information');
+        
+        // Don't use AI fallback for now - just show the error
+        console.error('MCP tool error:', response.error || response.error_message);
       } else {
-        setDrugResult(response);
+        setDeviceError('Unexpected response format from device search');
       }
     } catch (error) {
-      console.error('Drug search error:', error);
+      console.error('Device search error:', error);
+      setDeviceError(`Device search failed: ${error.message}`);
       
-      // If MCP call fails, try using AI agent
-      try {
-        const agentResponse = await agentFactory.routeQuery(
-          'fda_agent',
-          `Provide comprehensive information about ${drugName} including its uses, dosage, side effects, and warnings. Note that this information is AI-generated as there was an issue accessing the FDA database.`
-        );
-        
-        setDrugResult({
-          status: 'ai_generated',
-          drug_name: drugName,
-          message: agentResponse.response,
-          source: 'AI Generated Information'
-        });
-      } catch (agentError) {
-        console.error('AI generation error:', agentError);
-        setDrugResult({ status: 'error', error_message: error.message });
-      }
+      // Remove AI fallback to avoid OpenAI API issues
+      // If you fix your OpenAI key, you can add this back
     }
     
-    setLoading(false);
+    setDeviceLoading(false);
   };
 
   const searchClinicalTrials = async () => {
@@ -320,159 +306,6 @@ function App() {
     }
     
     setLoading(false);
-  };
-
-  const renderDrugResults = (result) => {
-    if (!result) return null;
-
-    if (result.status === 'error' || result.error_message) {
-      return (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <p className="text-red-800">{result.error_message || 'An error occurred'}</p>
-        </div>
-      );
-    }
-
-    // Handle AI-generated results
-    if (result.status === 'ai_generated') {
-      return (
-        <div className="space-y-4">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <div className="flex items-center">
-              <svg className="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <p className="text-blue-800 font-medium">AI-Generated Drug Information for "{result.drug_name}"</p>
-            </div>
-            <p className="text-sm text-blue-600 mt-1">Note: This drug was not found in the FDA database. The following information is AI-generated.</p>
-          </div>
-          
-          <div className="bg-white border border-gray-200 rounded-lg p-6">
-            <div className="prose max-w-none">
-              <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
-                {result.message}
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    if (result.status === 'success' && result.results) {
-      const results = Array.isArray(result.results) ? result.results : [];
-      
-      if (results.length === 0) {
-        return (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-            <p className="text-yellow-800">No results found for "{result.drug_name}"</p>
-          </div>
-        );
-      }
-
-      return (
-        <div className="space-y-4">
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-            <p className="text-green-800 font-medium">Found {result.total_results || results.length} results for "{result.drug_name}"</p>
-          </div>
-          
-          {results.map((drug, index) => (
-            <div key={index} className="bg-white border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
-              {drugSearchType === 'general' && (
-                <>
-                  <h4 className="text-lg font-semibold text-gray-900 mb-2">
-                    {drug.brand_name || drug.generic_name || 'Unknown Drug'}
-                  </h4>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <span className="font-medium text-gray-600">Generic Name:</span>
-                      <p className="text-gray-900">{drug.generic_name || 'N/A'}</p>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-600">Brand Name:</span>
-                      <p className="text-gray-900">{drug.brand_name || 'N/A'}</p>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-600">Manufacturer:</span>
-                      <p className="text-gray-900">{drug.labeler_name || drug.manufacturer || 'N/A'}</p>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-600">Product Type:</span>
-                      <p className="text-gray-900">{drug.product_type || 'N/A'}</p>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {drugSearchType === 'label' && (
-                <>
-                  <h4 className="text-lg font-semibold text-gray-900 mb-2">
-                    {drug.openfda?.brand_name?.[0] || drug.openfda?.generic_name?.[0] || 'Drug Label Information'}
-                  </h4>
-                  <div className="space-y-4 text-sm">
-                    {drug.indications_and_usage && (
-                      <div>
-                        <span className="font-medium text-gray-600">Indications and Usage:</span>
-                        <p className="text-gray-900 mt-1">{Array.isArray(drug.indications_and_usage) ? drug.indications_and_usage[0] : drug.indications_and_usage}</p>
-                      </div>
-                    )}
-                    {drug.warnings && (
-                      <div>
-                        <span className="font-medium text-gray-600">Warnings:</span>
-                        <p className="text-gray-900 mt-1">{Array.isArray(drug.warnings) ? drug.warnings[0] : drug.warnings}</p>
-                      </div>
-                    )}
-                    {drug.contraindications && (
-                      <div>
-                        <span className="font-medium text-gray-600">Contraindications:</span>
-                        <p className="text-gray-900 mt-1">{Array.isArray(drug.contraindications) ? drug.contraindications[0] : drug.contraindications}</p>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {drugSearchType === 'adverse_events' && (
-                <>
-                  <h4 className="text-lg font-semibold text-gray-900 mb-2">Adverse Event Report</h4>
-                  <div className="space-y-4 text-sm">
-                    {drug.patient?.drug && (
-                      <div>
-                        <span className="font-medium text-gray-600">Drugs Involved:</span>
-                        <ul className="list-disc list-inside mt-1">
-                          {drug.patient.drug.map((d, i) => (
-                            <li key={i} className="text-gray-900">
-                              {d.medicinalproduct || 'Unknown'} - {d.drugindication || 'No indication specified'}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {drug.patient?.reaction && (
-                      <div>
-                        <span className="font-medium text-gray-600">Reactions:</span>
-                        <ul className="list-disc list-inside mt-1">
-                          {drug.patient.reaction.map((r, i) => (
-                            <li key={i} className="text-gray-900">{r.reactionmeddrapt || 'Unknown reaction'}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    return (
-      <div className="bg-gray-50 rounded-lg p-6">
-        <pre className="whitespace-pre-wrap text-sm text-gray-700">
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      </div>
-    );
   };
 
   const renderClinicalTrialsResults = (result) => {
@@ -680,7 +513,7 @@ function App() {
               <textarea
                 className="w-full p-4 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent resize-none"
                 rows="4"
-                placeholder="Ask about drug information, clinical trials, interactions, symptoms, or any healthcare-related query..."
+                placeholder="Ask about device safety, adverse events, recalls, clinical trials, interactions, or any healthcare-related query..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyPress={(e) => {
@@ -835,13 +668,19 @@ function App() {
             <h4 className="text-sm font-medium text-gray-900 mb-3">Quick Templates</h4>
             <div className="space-y-2">
               <button 
-                onClick={() => setQuery("What are the side effects and interactions of metformin?")}
+                onClick={() => setQuery("What are the recent adverse events for pacemakers?")}
                 className="w-full text-left px-3 py-2 text-sm bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
               >
-                Drug side effects check
+                Medical device adverse events
               </button>
               <button 
-                onClick={() => setQuery("Find clinical trials for type 2 diabetes treatment")}
+                onClick={() => setQuery("Check for recent recalls of hip implants")}
+                className="w-full text-left px-3 py-2 text-sm bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                Device recall search
+              </button>
+              <button 
+                onClick={() => setQuery("Find clinical trials for robotic surgery treatments")}
                 className="w-full text-left px-3 py-2 text-sm bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
               >
                 Clinical trial search
@@ -859,104 +698,15 @@ function App() {
     </div>
   );
 
-  const renderDrugInfoTab = () => (
-    <div className="max-w-4xl mx-auto">
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <div className="mb-6">
-          <h2 className="text-2xl font-semibold text-gray-900">FDA Drug Information Database</h2>
-          <p className="text-gray-600 mt-2">Access comprehensive drug information from FDA databases including labels, adverse events, and general information.</p>
-        </div>
-
-        <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Drug Name
-            </label>
-            <input
-              type="text"
-              value={drugName}
-              onChange={(e) => setDrugName(e.target.value)}
-              placeholder="Enter drug name (e.g., aspirin, metformin, lisinopril)"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Information Type
-            </label>
-            <div className="grid grid-cols-3 gap-3">
-              <button
-                onClick={() => setDrugSearchType('general')}
-                className={`p-3 rounded-lg border transition-all ${
-                  drugSearchType === 'general'
-                    ? 'border-teal-600 bg-teal-50 text-teal-700'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className="font-medium">General Info</div>
-                <div className="text-xs mt-1 text-gray-500">Overview & usage</div>
-              </button>
-              <button
-                onClick={() => setDrugSearchType('label')}
-                className={`p-3 rounded-lg border transition-all ${
-                  drugSearchType === 'label'
-                    ? 'border-teal-600 bg-teal-50 text-teal-700'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className="font-medium">Drug Label</div>
-                <div className="text-xs mt-1 text-gray-500">Official labeling</div>
-              </button>
-              <button
-                onClick={() => setDrugSearchType('adverse_events')}
-                className={`p-3 rounded-lg border transition-all ${
-                  drugSearchType === 'adverse_events'
-                    ? 'border-teal-600 bg-teal-50 text-teal-700'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className="font-medium">Adverse Events</div>
-                <div className="text-xs mt-1 text-gray-500">Side effects reported</div>
-              </button>
-            </div>
-          </div>
-
-          <button
-            onClick={searchDrug}
-            disabled={loading || !drugName.trim()}
-            className={`w-full py-3 px-4 rounded-lg font-medium transition-all flex items-center justify-center ${
-              loading || !drugName.trim()
-                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                : 'bg-gradient-to-r from-teal-600 to-teal-700 text-white hover:from-teal-700 hover:to-teal-800'
-            }`}
-          >
-            {loading ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Searching FDA Database...
-              </>
-            ) : (
-              <>
-                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                Search Drug Information
-              </>
-            )}
-          </button>
-        </div>
-
-        {drugResult && (
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Search Results</h3>
-            {renderDrugResults(drugResult)}
-          </div>
-        )}
-      </div>
+  // Updated device monitoring tab (replaces drug info tab)
+  const renderDeviceMonitoringTab = () => (
+    <div className="max-w-7xl mx-auto">
+      <DeviceInformation 
+        onSearch={searchDevices}
+        isLoading={deviceLoading}
+        results={deviceResult}
+        error={deviceError}
+      />
     </div>
   );
 
@@ -1103,7 +853,7 @@ function App() {
                 value={drug2}
                 onChange={(e) => setDrug2(e.target.value)}
                 placeholder="Enter second drug name"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:border-transparent"
               />
             </div>
           </div>
@@ -1222,7 +972,7 @@ function App() {
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Query Distribution</h3>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-600">Drug Information</span>
+              <span className="text-sm text-gray-600">Device Monitoring</span>
               <span className="text-sm font-medium">35%</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
@@ -1280,8 +1030,10 @@ function App() {
     switch (activeTab) {
       case 'query':
         return renderQueryTab();
-      case 'drug-info':
-        return renderDrugInfoTab();
+      case 'device-monitoring': // Updated from 'drug-info'
+        return renderDeviceMonitoringTab();
+      case 'drug-info': // Keep for backward compatibility
+        return renderDeviceMonitoringTab(); // Redirect old tab to new functionality
       case 'clinical-trials':
         return renderClinicalTrialsTab();
       case 'interactions':
@@ -1297,7 +1049,7 @@ function App() {
       case 'analytics':
         return renderAnalyticsTab();
       default:
-        return null;
+        return renderQueryTab(); // Default fallback
     }
   };
 

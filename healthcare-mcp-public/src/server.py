@@ -381,7 +381,7 @@ async def api_all_usage_stats(
         logger.error("Error in all usage stats", error=str(e))
         return ErrorResponse(error_message=f"Error getting all usage statistics: {str(e)}")
 
-# Add the specific call-tool endpoint
+# Add the specific call-tool endpoint - UPDATED WITH DEVICE TOOL
 @app.post("/mcp/call-tool",
           summary="Call a specific tool by name",
           description="Generic endpoint to call any tool by name with arguments",
@@ -400,7 +400,8 @@ async def call_tool(
     - **session_id**: Optional session ID for tracking usage
     """
     try:
-        from src.main import fda_drug_lookup, pubmed_search, health_topics, clinical_trials_search, lookup_icd_code, get_usage_stats, get_all_usage_stats
+        # UPDATED IMPORT TO INCLUDE FDA_DEVICE_LOOKUP
+        from src.main import fda_drug_lookup, fda_device_lookup, pubmed_search, health_topics, clinical_trials_search, lookup_icd_code, get_usage_stats, get_all_usage_stats
         
         tool_name = tool_request.name
         arguments = tool_request.arguments
@@ -410,9 +411,10 @@ async def call_tool(
                    tool_name=tool_name, 
                    session_id=session_id)
         
-        # Map tool names to their corresponding functions
+        # UPDATED TOOL MAPPING TO INCLUDE FDA_DEVICE_LOOKUP
         tool_mapping = {
             "fda_drug_lookup": lambda args: fda_drug_lookup(session_id, **args),
+            "fda_device_lookup": lambda args: fda_device_lookup(session_id, **args),  # NEW DEVICE TOOL
             "pubmed_search": lambda args: pubmed_search(session_id, **args),
             "health_topics": lambda args: health_topics(session_id, **args),
             "clinical_trials_search": lambda args: clinical_trials_search(session_id, **args),
@@ -424,12 +426,13 @@ async def call_tool(
         if tool_name not in tool_mapping:
             logger.warning("Tool not found", tool_name=tool_name)
             return ErrorResponse(
-                error_message=f"Tool '{tool_name}' not found",
+                error_message=f"Tool '{tool_name}' not found. Available tools: {', '.join(tool_mapping.keys())}",
                 error_code="TOOL_NOT_FOUND"
             )
         
         # Call the appropriate tool function
         result = await tool_mapping[tool_name](arguments)
+        logger.info("Tool call successful", tool_name=tool_name, session_id=session_id)
         return result
     except Exception as e:
         logger.error("Error in tool call", error=str(e), tool_name=tool_request.name)
@@ -437,6 +440,70 @@ async def call_tool(
             error_message=f"Error calling tool: {str(e)}",
             error_code="TOOL_EXECUTION_ERROR"
         )
+
+# DEBUG ENDPOINTS
+@app.get("/debug/available-tools",
+         summary="Debug: List available tools",
+         tags=["Debug"])
+async def debug_available_tools():
+    """Debug endpoint to see what tools are available"""
+    try:
+        from src.main import fda_device_lookup, fda_drug_lookup, pubmed_search, health_topics, clinical_trials_search, lookup_icd_code
+        
+        tools_status = {}
+        
+        # Test each tool function
+        test_functions = {
+            "fda_device_lookup": fda_device_lookup,
+            "fda_drug_lookup": fda_drug_lookup,
+            "pubmed_search": pubmed_search,
+            "health_topics": health_topics,
+            "clinical_trials_search": clinical_trials_search,
+            "lookup_icd_code": lookup_icd_code
+        }
+        
+        for tool_name, func in test_functions.items():
+            try:
+                tools_status[tool_name] = "available" if callable(func) else "not callable"
+            except Exception as e:
+                tools_status[tool_name] = f"error: {str(e)}"
+        
+        return {
+            "status": "success",
+            "tools": tools_status,
+            "total_tools": len(tools_status)
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+@app.post("/debug/test-device-tool",
+          summary="Debug: Test device tool directly",
+          tags=["Debug"])
+async def test_device_tool():
+    """Test the device tool directly"""
+    try:
+        from src.tools.fda_tool import FDATool
+        tool = FDATool()
+        
+        test_params = {
+            'searchType': 'adverse_events',
+            'dateRange': 30,
+            'deviceModel': None,
+            'eventType': 'all'
+        }
+        
+        result = await tool.lookup_device(test_params)
+        return result
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
 
 # Health check endpoint
 @app.get("/health",
