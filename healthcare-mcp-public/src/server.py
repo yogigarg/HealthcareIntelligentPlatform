@@ -331,6 +331,166 @@ async def api_lookup_icd_code(
         logger.error("Error in ICD code lookup", error=str(e), code=code, description=description)
         return ErrorResponse(error_message=f"Error looking up ICD-10 code: {str(e)}")
 
+# NEW SURGICAL TRIAL MONITORING ENDPOINTS
+@app.get("/api/surgical_trials",
+         summary="Monitor surgical trials across global registries",
+         description="Monitor surgical trials for competitive intelligence",
+         response_model=Union[SuccessResponse, ErrorResponse],
+         tags=["Surgical Trial Intelligence"])
+@limiter.limit("30/minute")
+async def api_monitor_surgical_trials(
+    request: Request,
+    device_category: Annotated[Optional[str], Query(description="Device category (cardiovascular, orthopedic, etc.)")] = None,
+    competitor_companies: Annotated[Optional[str], Query(description="Comma-separated list of competitor companies")] = None,
+    regions: Annotated[Optional[str], Query(description="Comma-separated list of regions")] = None,
+    time_period_days: Annotated[int, Query(description="Number of days to look back", ge=1, le=365)] = 30,
+    trial_phases: Annotated[Optional[str], Query(description="Comma-separated list of trial phases")] = None,
+    session_id: Annotated[Optional[str], Header(description="Session ID for tracking usage")] = None
+):
+    """
+    Monitor surgical trials across global registries for competitive intelligence
+    """
+    try:
+        from src.main import monitor_surgical_trials
+        
+        # Convert comma-separated strings to lists
+        competitor_list = competitor_companies.split(',') if competitor_companies else None
+        regions_list = regions.split(',') if regions else None
+        phases_list = trial_phases.split(',') if trial_phases else None
+        
+        logger.info("Surgical trials monitoring request", 
+                   device_category=device_category,
+                   competitors=competitor_list,
+                   regions=regions_list,
+                   time_period=time_period_days,
+                   session_id=session_id)
+        
+        return await monitor_surgical_trials(
+            session_id, 
+            device_category=device_category,
+            competitor_companies=competitor_list,
+            regions=regions_list,
+            time_period_days=time_period_days,
+            trial_phases=phases_list
+        )
+    except Exception as e:
+        logger.error("Error in surgical trials monitoring", error=str(e))
+        return ErrorResponse(error_message=f"Error monitoring surgical trials: {str(e)}")
+
+@app.get("/api/competitive_dashboard",
+         summary="Get competitive dashboard data for a medical device company",
+         description="Get comprehensive competitive intelligence dashboard",
+         response_model=Union[SuccessResponse, ErrorResponse],
+         tags=["Surgical Trial Intelligence"])
+@limiter.limit("20/minute")
+async def api_competitive_dashboard(
+    request: Request,
+    company_name: Annotated[str, Query(description="Company name to analyze")],
+    device_categories: Annotated[Optional[str], Query(description="Comma-separated device categories")] = None,
+    time_period_days: Annotated[int, Query(description="Analysis time period in days", ge=1, le=365)] = 90,
+    session_id: Annotated[Optional[str], Header(description="Session ID for tracking usage")] = None
+):
+    """
+    Get comprehensive competitive dashboard data for a medical device company
+    """
+    try:
+        from src.main import get_competitive_dashboard
+        
+        # Convert comma-separated string to list
+        categories_list = device_categories.split(',') if device_categories else None
+        
+        logger.info("Competitive dashboard request", 
+                   company=company_name,
+                   categories=categories_list,
+                   time_period=time_period_days,
+                   session_id=session_id)
+        
+        return await get_competitive_dashboard(
+            session_id,
+            company_name=company_name,
+            device_categories=categories_list,
+            time_period_days=time_period_days
+        )
+    except Exception as e:
+        logger.error("Error in competitive dashboard", error=str(e), company=company_name)
+        return ErrorResponse(error_message=f"Error generating competitive dashboard: {str(e)}")
+
+@app.get("/api/competitor_tracking",
+         summary="Track specific competitor activity",
+         description="Track competitor activity and generate alerts",
+         response_model=Union[SuccessResponse, ErrorResponse],
+         tags=["Surgical Trial Intelligence"])
+@limiter.limit("30/minute")
+async def api_competitor_tracking(
+    request: Request,
+    target_competitors: Annotated[str, Query(description="Comma-separated list of competitors to track")],
+    device_category: Annotated[Optional[str], Query(description="Device category to monitor")] = None,
+    alert_threshold_days: Annotated[int, Query(description="Alert threshold in days", ge=1, le=30)] = 7,
+    session_id: Annotated[Optional[str], Header(description="Session ID for tracking usage")] = None
+):
+    """
+    Track specific competitor activity and generate alerts
+    """
+    try:
+        from src.main import track_competitor_activity
+        
+        # Convert comma-separated string to list
+        competitors_list = target_competitors.split(',')
+        
+        logger.info("Competitor tracking request", 
+                   competitors=competitors_list,
+                   category=device_category,
+                   threshold=alert_threshold_days,
+                   session_id=session_id)
+        
+        return await track_competitor_activity(
+            session_id,
+            target_competitors=competitors_list,
+            device_category=device_category,
+            alert_threshold_days=alert_threshold_days
+        )
+    except Exception as e:
+        logger.error("Error in competitor tracking", error=str(e))
+        return ErrorResponse(error_message=f"Error tracking competitors: {str(e)}")
+
+@app.get("/api/market_trends",
+         summary="Analyze market trends in surgical device trials",
+         description="Analyze market trends and emerging patterns",
+         response_model=Union[SuccessResponse, ErrorResponse],
+         tags=["Surgical Trial Intelligence"])
+@limiter.limit("20/minute")
+async def api_market_trends(
+    request: Request,
+    device_category: Annotated[str, Query(description="Device category to analyze")],
+    time_period_days: Annotated[int, Query(description="Time period for analysis", ge=30, le=365)] = 180,
+    geographic_focus: Annotated[Optional[str], Query(description="Comma-separated regions to focus on")] = None,
+    session_id: Annotated[Optional[str], Header(description="Session ID for tracking usage")] = None
+):
+    """
+    Analyze market trends and emerging patterns in surgical device trials
+    """
+    try:
+        from src.main import analyze_market_trends
+        
+        # Convert comma-separated string to list
+        regions_list = geographic_focus.split(',') if geographic_focus else None
+        
+        logger.info("Market trends analysis request", 
+                   category=device_category,
+                   time_period=time_period_days,
+                   regions=regions_list,
+                   session_id=session_id)
+        
+        return await analyze_market_trends(
+            session_id,
+            device_category=device_category,
+            time_period_days=time_period_days,
+            geographic_focus=regions_list
+        )
+    except Exception as e:
+        logger.error("Error in market trends analysis", error=str(e))
+        return ErrorResponse(error_message=f"Error analyzing market trends: {str(e)}")
+
 @app.get("/api/usage_stats",
          summary="Get usage statistics for the current session",
          description="Get a summary of API usage for the current session",
@@ -381,7 +541,7 @@ async def api_all_usage_stats(
         logger.error("Error in all usage stats", error=str(e))
         return ErrorResponse(error_message=f"Error getting all usage statistics: {str(e)}")
 
-# Add the specific call-tool endpoint - UPDATED WITH DEVICE TOOL
+# Add the specific call-tool endpoint - UPDATED WITH ALL NEW SURGICAL TRIAL TOOLS
 @app.post("/mcp/call-tool",
           summary="Call a specific tool by name",
           description="Generic endpoint to call any tool by name with arguments",
@@ -400,8 +560,21 @@ async def call_tool(
     - **session_id**: Optional session ID for tracking usage
     """
     try:
-        # UPDATED IMPORT TO INCLUDE FDA_DEVICE_LOOKUP
-        from src.main import fda_drug_lookup, fda_device_lookup, pubmed_search, health_topics, clinical_trials_search, lookup_icd_code, get_usage_stats, get_all_usage_stats
+        # UPDATED IMPORT TO INCLUDE ALL SURGICAL TRIAL TOOLS
+        from src.main import (
+            fda_drug_lookup, 
+            fda_device_lookup, 
+            pubmed_search, 
+            health_topics, 
+            clinical_trials_search, 
+            lookup_icd_code, 
+            get_usage_stats, 
+            get_all_usage_stats,
+            monitor_surgical_trials,
+            get_competitive_dashboard,
+            track_competitor_activity,
+            analyze_market_trends
+        )
         
         tool_name = tool_request.name
         arguments = tool_request.arguments
@@ -411,16 +584,21 @@ async def call_tool(
                    tool_name=tool_name, 
                    session_id=session_id)
         
-        # UPDATED TOOL MAPPING TO INCLUDE FDA_DEVICE_LOOKUP
+        # UPDATED TOOL MAPPING TO INCLUDE ALL SURGICAL TRIAL TOOLS
         tool_mapping = {
             "fda_drug_lookup": lambda args: fda_drug_lookup(session_id, **args),
-            "fda_device_lookup": lambda args: fda_device_lookup(session_id, **args),  # NEW DEVICE TOOL
+            "fda_device_lookup": lambda args: fda_device_lookup(session_id, **args),
             "pubmed_search": lambda args: pubmed_search(session_id, **args),
             "health_topics": lambda args: health_topics(session_id, **args),
             "clinical_trials_search": lambda args: clinical_trials_search(session_id, **args),
             "lookup_icd_code": lambda args: lookup_icd_code(session_id, **args),
             "get_usage_stats": lambda _: get_usage_stats(session_id),
-            "get_all_usage_stats": lambda args: get_all_usage_stats(session_id, **args)
+            "get_all_usage_stats": lambda args: get_all_usage_stats(session_id, **args),
+            # NEW SURGICAL TRIAL INTELLIGENCE TOOLS
+            "monitor_surgical_trials": lambda args: monitor_surgical_trials(session_id, **args),
+            "get_competitive_dashboard": lambda args: get_competitive_dashboard(session_id, **args),
+            "track_competitor_activity": lambda args: track_competitor_activity(session_id, **args),
+            "analyze_market_trends": lambda args: analyze_market_trends(session_id, **args)
         }
         
         if tool_name not in tool_mapping:
@@ -448,7 +626,18 @@ async def call_tool(
 async def debug_available_tools():
     """Debug endpoint to see what tools are available"""
     try:
-        from src.main import fda_device_lookup, fda_drug_lookup, pubmed_search, health_topics, clinical_trials_search, lookup_icd_code
+        from src.main import (
+            fda_device_lookup, 
+            fda_drug_lookup, 
+            pubmed_search, 
+            health_topics, 
+            clinical_trials_search, 
+            lookup_icd_code,
+            monitor_surgical_trials,
+            get_competitive_dashboard,
+            track_competitor_activity,
+            analyze_market_trends
+        )
         
         tools_status = {}
         
@@ -459,7 +648,11 @@ async def debug_available_tools():
             "pubmed_search": pubmed_search,
             "health_topics": health_topics,
             "clinical_trials_search": clinical_trials_search,
-            "lookup_icd_code": lookup_icd_code
+            "lookup_icd_code": lookup_icd_code,
+            "monitor_surgical_trials": monitor_surgical_trials,
+            "get_competitive_dashboard": get_competitive_dashboard,
+            "track_competitor_activity": track_competitor_activity,
+            "analyze_market_trends": analyze_market_trends
         }
         
         for tool_name, func in test_functions.items():
@@ -477,32 +670,6 @@ async def debug_available_tools():
         return {
             "status": "error",
             "error": str(e)
-        }
-
-@app.post("/debug/test-device-tool",
-          summary="Debug: Test device tool directly",
-          tags=["Debug"])
-async def test_device_tool():
-    """Test the device tool directly"""
-    try:
-        from src.tools.fda_tool import FDATool
-        tool = FDATool()
-        
-        test_params = {
-            'searchType': 'adverse_events',
-            'dateRange': 30,
-            'deviceModel': None,
-            'eventType': 'all'
-        }
-        
-        result = await tool.lookup_device(test_params)
-        return result
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "error_type": type(e).__name__
         }
 
 # Health check endpoint

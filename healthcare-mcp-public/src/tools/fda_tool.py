@@ -158,21 +158,47 @@ class FDATool(BaseTool):
         endpoint = f"{self.base_url}/event.json"
         params = {
             "search": query,
-            "limit": 20,  # Reduced from 100 to avoid overwhelming the API
+            "limit": 10,  # Reduced limit to avoid API overload
             "sort": "date_received:desc"
         }
         
         if self.api_key:
             params["api_key"] = self.api_key
         
+        logger.info(f"FDA API request - URL: {endpoint}")
+        logger.info(f"FDA API request - Query: {query}")
+        logger.info(f"FDA API request - Params: {params}")
+        
         try:
-            # Make the request
+            # Make the request with enhanced error handling
             logger.info(f"Fetching FDA device information for: {device_name or 'all devices'}")
-            data = await self._make_request(endpoint, params=params)
+            
+            # Use the synchronous _make_request method from base class
+            try:
+                raw_response = self._make_request(endpoint, params=params)
+                logger.info(f"Raw response type: {type(raw_response)}")
+                
+                # Handle case where response is a string instead of dict
+                if isinstance(raw_response, str):
+                    logger.error(f"FDA API returned string response: {raw_response[:200]}")
+                    raise Exception(f"FDA API returned string instead of JSON: {raw_response[:200]}")
+                elif not isinstance(raw_response, dict):
+                    logger.error(f"FDA API returned unexpected type: {type(raw_response)}")
+                    raise Exception(f"FDA API returned unexpected response type: {type(raw_response)}")
+                
+                data = raw_response
+                
+            except Exception as req_error:
+                logger.error(f"FDA request failed: {str(req_error)}")
+                raise req_error
             
             # Process and categorize results
             # Filter results by date manually AFTER getting them from API
             all_events = data.get("results", [])
+            if not isinstance(all_events, list):
+                logger.error(f"FDA API results field is not a list: {type(all_events)}")
+                raise Exception("FDA API returned invalid results format")
+                
             filtered_events = self._filter_events_by_date(all_events, date_range)
 
             # Process and categorize results
@@ -186,6 +212,11 @@ class FDATool(BaseTool):
             
         except Exception as e:
             logger.error(f"FDA API error: {str(e)}")
+            
+            # Log more details about the error for debugging
+            if hasattr(e, 'response'):
+                logger.error(f"Response status: {getattr(e.response, 'status_code', 'unknown')}")
+                logger.error(f"Response content: {getattr(e.response, 'text', 'unknown')[:500]}")
             
             # Return a structured error response with helpful information
             return {
@@ -390,24 +421,47 @@ class FDATool(BaseTool):
         }
         
         device_breakdown = {}
+        manufacturer_breakdown = {}
         
         for event in events:
-            processed_event = {
-                "report_number": event.get("report_number", "Unknown"),
-                "date_received": event.get("date_received", "Unknown"),
-                "event_type": event.get("event_type", "Unknown"),
-                "device_name": event.get("device", [{}])[0].get("device_name", "Unknown") if event.get("device") else "Unknown",
-                "manufacturer": event.get("device", [{}])[0].get("manufacturer_name", "Unknown") if event.get("device") else "Unknown",
-                "event_description": event.get("mdr_text", [{}])[0].get("text", "No description available") if event.get("mdr_text") else "No description available",
-                "patient_problems": []
-            }
+            # Extract device information - handle multiple devices per event
+            device_info = self._extract_device_info(event.get("device", []))
             
-            # Extract patient problems if available
-            if event.get("patient"):
-                for patient in event.get("patient", []):
-                    problem = patient.get("patient_problem_flag", "")
-                    if problem:
-                        processed_event["patient_problems"].append(problem)
+            # Extract manufacturer information with multiple fallbacks
+            manufacturer_info = self._extract_manufacturer_info(event.get("device", []))
+            
+            # Extract event description from multiple possible sources
+            event_description = self._extract_event_description(event)
+            
+            # Format date for better readability
+            formatted_date = self._format_date(event.get("date_received", ""))
+            
+            processed_event = {
+                "report_number": event.get("report_number", "Not Available"),
+                "date_received": formatted_date,
+                "event_type": self._format_event_type(event.get("event_type", "")),
+                "device_name": device_info.get("name", "Device Not Specified"),
+                "generic_name": device_info.get("generic_name", ""),
+                "brand_name": device_info.get("brand_name", ""),
+                "model_number": device_info.get("model_number", ""),
+                "product_code": device_info.get("product_code", ""),
+                "manufacturer": manufacturer_info.get("name", "Manufacturer Not Available"),
+                "manufacturer_city": manufacturer_info.get("city", ""),
+                "manufacturer_state": manufacturer_info.get("state", ""),
+                "manufacturer_country": manufacturer_info.get("country", ""),
+                "event_description": event_description,
+                "patient_problems": self._extract_patient_problems(event.get("patient", [])),
+                "remedial_action": self._extract_remedial_action(event.get("remedial_action", [])),
+                "event_location": self._extract_event_location(event),
+                "device_operator": event.get("device_operator", ""),
+                "implant_flag": event.get("implant_flag", ""),
+                "baseline_510k_number": device_info.get("baseline_510k_number", ""),
+                # Add FDA URLs
+                "fda_report_url": self._generate_fda_url(event.get("report_number", ""), device_name),
+                "fda_device_search_url": self._generate_device_search_url(device_info.get("name", "")),
+                "openfda_api_url": self._generate_openfda_api_url(device_info.get("name", "")),
+                "report_number_for_search": event.get("report_number", "")  # Include for manual search
+            }
             
             processed_events.append(processed_event)
             
@@ -422,13 +476,20 @@ class FDATool(BaseTool):
             
             # Track device breakdown
             device_name_actual = processed_event["device_name"]
-            device_breakdown[device_name_actual] = device_breakdown.get(device_name_actual, 0) + 1
+            if device_name_actual != "Device Not Specified":
+                device_breakdown[device_name_actual] = device_breakdown.get(device_name_actual, 0) + 1
+            
+            # Track manufacturer breakdown
+            manufacturer_actual = processed_event["manufacturer"]
+            if manufacturer_actual != "Manufacturer Not Available":
+                manufacturer_breakdown[manufacturer_actual] = manufacturer_breakdown.get(manufacturer_actual, 0) + 1
         
         return {
             "status": "success",
             "events": processed_events,
             "summary": event_summary,
             "device_breakdown": device_breakdown,
+            "manufacturer_breakdown": manufacturer_breakdown,
             "query_info": {
                 "date_range": date_range,
                 "device_name": device_name,
@@ -578,21 +639,49 @@ class FDATool(BaseTool):
                 "events": [
                     {
                         "report_number": "DEMO-2024-001",
-                        "date_received": "20240915",
-                        "event_type": "M",
-                        "device_name": device_name or "Medical Device",
-                        "manufacturer": "Demo Manufacturer Inc.",
-                        "event_description": f"Reported malfunction of {device_name or 'device'} during routine operation. Device stopped functioning as expected. No patient injury reported. Investigation ongoing.",
-                        "patient_problems": []
+                        "date_received": "September 15, 2024",
+                        "event_type": "Device Malfunction",
+                        "device_name": device_name or "Surgical Instrument",
+                        "generic_name": "Surgical Device",
+                        "brand_name": "ProSurg Model X",
+                        "model_number": "PSX-2024",
+                        "product_code": "SUR",
+                        "manufacturer": "MedTech Solutions Inc.",
+                        "manufacturer_city": "Boston",
+                        "manufacturer_state": "MA",
+                        "manufacturer_country": "US",
+                        "event_description": f"Reported malfunction of {device_name or 'surgical device'} during routine operation. Device stopped functioning as expected during procedure. No patient injury reported. Device was immediately replaced and procedure completed successfully. Investigation ongoing with manufacturer.",
+                        "patient_problems": [],
+                        "remedial_action": "Device recalled for inspection; Software update issued",
+                        "event_location": "General Hospital, Boston",
+                        "device_operator": "HEALTH PROFESSIONAL",
+                        "implant_flag": "N",
+                        "baseline_510k_number": "K123456",
+                        "fda_report_url": "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm",
+                        "fda_device_search_url": f"https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm?search_term={device_name or 'surgical'}"
                     },
                     {
                         "report_number": "DEMO-2024-002", 
-                        "date_received": "20240910",
-                        "event_type": "I",
-                        "device_name": device_name or "Medical Device",
-                        "manufacturer": "Demo Manufacturer Inc.",
-                        "event_description": f"Patient experienced minor complications during {device_name or 'device'} use. Medical attention required. Device performance under review.",
-                        "patient_problems": ["Device malfunction"]
+                        "date_received": "September 10, 2024",
+                        "event_type": "Patient Injury",
+                        "device_name": device_name or "Medical Monitoring Device",
+                        "generic_name": "Patient Monitor",
+                        "brand_name": "VitalWatch Pro",
+                        "model_number": "VW-500",
+                        "product_code": "MON",
+                        "manufacturer": "Advanced Medical Systems Corp.",
+                        "manufacturer_city": "San Francisco",
+                        "manufacturer_state": "CA", 
+                        "manufacturer_country": "US",
+                        "event_description": f"Patient experienced minor complications during {device_name or 'device'} use. Device alarm failed to activate during critical threshold event. Medical attention required. Patient stable after intervention. Device performance under review.",
+                        "patient_problems": ["Device alarm malfunction", "Delayed response"],
+                        "remedial_action": "Firmware update; Enhanced training provided",
+                        "event_location": "Memorial Medical Center, San Francisco",
+                        "device_operator": "HEALTH PROFESSIONAL",
+                        "implant_flag": "N",
+                        "baseline_510k_number": "K789012",
+                        "fda_report_url": "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm",
+                        "fda_device_search_url": f"https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm?search_term={device_name or 'monitor'}"
                     }
                 ],
                 "summary": {
@@ -602,7 +691,12 @@ class FDATool(BaseTool):
                     "malfunction": 1
                 },
                 "device_breakdown": {
-                    device_name or "Medical Device": 2
+                    device_name or "Surgical Instrument": 1,
+                    device_name or "Medical Monitoring Device": 1
+                },
+                "manufacturer_breakdown": {
+                    "MedTech Solutions Inc.": 1,
+                    "Advanced Medical Systems Corp.": 1
                 },
                 "query_info": {
                     "date_range": 30,
@@ -619,11 +713,11 @@ class FDATool(BaseTool):
                 "recalls": [
                     {
                         "recall_number": "DEMO-RECALL-001",
-                        "recall_initiation_date": "20240901",
+                        "recall_initiation_date": "September 01, 2024",
                         "recall_class": "Class II",
-                        "product_description": f"Demo {device_name or 'Medical Device'} - Model XYZ-123",
-                        "reason": f"Potential malfunction in {device_name or 'device'} software that may cause incorrect readings",
-                        "firm_name": "Demo Medical Corp",
+                        "product_description": f"Demo {device_name or 'Medical Device'} - Model XYZ-123, Serial Numbers 1000-2000",
+                        "reason": f"Potential malfunction in {device_name or 'device'} software that may cause incorrect readings during critical operations",
+                        "firm_name": "Demo Medical Corporation",
                         "status": "Ongoing"
                     }
                 ],
@@ -670,14 +764,303 @@ class FDATool(BaseTool):
                     ],
                     "recommendations": [
                         "Monitor device performance closely",
-                        "Review maintenance procedures"
+                        "Review maintenance procedures",
+                        "Enhanced operator training recommended"
                     ]
                 },
                 "demo_mode": True,
                 "message": "Demo analysis shown - FDA API temporarily unavailable"
             }
     
-    def _format_success_response(self, **kwargs) -> Dict[str, Any]:
+    def _extract_device_info(self, devices: list) -> Dict[str, str]:
+        """Extract comprehensive device information from the device array"""
+        if not devices:
+            return {"name": "Device Not Specified"}
+        
+        # Take the first device (most reports have one device)
+        device = devices[0] if isinstance(devices, list) else devices
+        
+        # Handle case where device might be a string instead of dict
+        if isinstance(device, str):
+            return {"name": device.strip() if device else "Device Not Specified"}
+        
+        if not isinstance(device, dict):
+            return {"name": "Device Not Specified"}
+        
+        # Try multiple fields for device name in order of preference
+        device_name = (
+            device.get("device_name") or
+            device.get("generic_name") or
+            device.get("brand_name") or
+            device.get("model_number") or
+            "Device Not Specified"
+        )
+        
+        return {
+            "name": device_name.strip() if device_name else "Device Not Specified",
+            "generic_name": str(device.get("generic_name", "")).strip(),
+            "brand_name": str(device.get("brand_name", "")).strip(),
+            "model_number": str(device.get("model_number", "")).strip(),
+            "product_code": str(device.get("device_report_product_code", "")).strip(),
+            "baseline_510k_number": str(device.get("baseline_510_k__number", "")).strip()
+        }
+    
+    def _extract_manufacturer_info(self, devices: list) -> Dict[str, str]:
+        """Extract comprehensive manufacturer information"""
+        if not devices:
+            return {"name": "Manufacturer Not Available"}
+        
+        device = devices[0] if isinstance(devices, list) else devices
+        
+        # Handle case where device might be a string instead of dict
+        if isinstance(device, str):
+            return {"name": "Manufacturer Not Available"}
+        
+        if not isinstance(device, dict):
+            return {"name": "Manufacturer Not Available"}
+        
+        # Try multiple fields for manufacturer name
+        manufacturer_name = (
+            device.get("manufacturer_d_name") or
+            device.get("manufacturer_name") or
+            device.get("manufacturer_g1_name") or
+            "Manufacturer Not Available"
+        )
+        
+        return {
+            "name": str(manufacturer_name).strip() if manufacturer_name else "Manufacturer Not Available",
+            "city": str(device.get("manufacturer_d_city", "")).strip(),
+            "state": str(device.get("manufacturer_d_state", "")).strip(),
+            "country": str(device.get("manufacturer_d_country", "")).strip(),
+            "address": str(device.get("manufacturer_d_address_1", "")).strip(),
+            "zip_code": str(device.get("manufacturer_d_zip_code", "")).strip()
+        }
+    
+    def _extract_event_description(self, event: Dict) -> str:
+        """Extract event description from multiple possible sources"""
+        if not isinstance(event, dict):
+            return "Event details not available"
+            
+        # Try mdr_text first (most detailed)
+        mdr_text = event.get("mdr_text")
+        if mdr_text:
+            if isinstance(mdr_text, list):
+                for text_entry in mdr_text:
+                    if isinstance(text_entry, dict) and text_entry.get("text"):
+                        return str(text_entry["text"]).strip()
+            elif isinstance(mdr_text, dict) and mdr_text.get("text"):
+                return str(mdr_text["text"]).strip()
+            elif isinstance(mdr_text, str):
+                return mdr_text.strip()
+        
+        # Try event_description field
+        event_desc = event.get("event_description")
+        if event_desc and isinstance(event_desc, str):
+            return event_desc.strip()
+        
+        # Try narrative fields
+        narrative = event.get("narrative")
+        if narrative and isinstance(narrative, str):
+            return narrative.strip()
+        
+        # Fallback to a constructed description
+        event_type = self._format_event_type(event.get("event_type", ""))
+        if event_type != "Unknown Event Type":
+            return f"Medical device event reported: {event_type}"
+        
+        return "Event details not available in report"
+    
+    def _extract_patient_problems(self, patients: list) -> list:
+        """Extract patient problems from patient data"""
+        problems = []
+        if not patients or not isinstance(patients, list):
+            return problems
+        
+        for patient in patients:
+            if not isinstance(patient, dict):
+                continue
+                
+            # Check multiple possible fields for patient problems
+            problem_flag = patient.get("patient_problem_flag")
+            if problem_flag and isinstance(problem_flag, str):
+                problems.append(problem_flag)
+                
+            problem_code = patient.get("patient_problem_code")
+            if problem_code and isinstance(problem_code, str):
+                problems.append(problem_code)
+                
+            # Also check for sequence_number_treatment or outcome
+            treatment_seq = patient.get("sequence_number_treatment")
+            if treatment_seq:
+                problems.append(f"Treatment sequence: {treatment_seq}")
+        
+        return list(set(problems))  # Remove duplicates
+    
+    def _extract_remedial_action(self, remedial_actions: list) -> str:
+        """Extract remedial action taken"""
+        if not remedial_actions or not isinstance(remedial_actions, list):
+            return ""
+        
+        actions = []
+        for action in remedial_actions:
+            if isinstance(action, dict):
+                remedial_action = action.get("remedial_action")
+                if remedial_action and isinstance(remedial_action, str):
+                    actions.append(remedial_action)
+            elif isinstance(action, str):
+                actions.append(action)
+        
+        return "; ".join(actions) if actions else ""
+    
+    def _extract_event_location(self, event: Dict) -> str:
+        """Extract where the event occurred"""
+        if not isinstance(event, dict):
+            return ""
+            
+        # Try multiple location fields
+        location_parts = []
+        
+        event_location = event.get("event_location")
+        if event_location and isinstance(event_location, str):
+            location_parts.append(event_location)
+        
+        distributor_city = event.get("distributor_city")
+        if distributor_city and isinstance(distributor_city, str):
+            location_parts.append(distributor_city)
+        
+        distributor_state = event.get("distributor_state")
+        if distributor_state and isinstance(distributor_state, str):
+            location_parts.append(distributor_state)
+        
+        return ", ".join(location_parts) if location_parts else ""
+    
+    def _format_date(self, date_str: str) -> str:
+        """Format date from YYYYMMDD to readable format"""
+        if not date_str or len(date_str) < 8:
+            return "Date Not Available"
+        
+        try:
+            # Parse YYYYMMDD format
+            year = date_str[:4]
+            month = date_str[4:6]
+            day = date_str[6:8]
+            
+            # Create readable date
+            date_obj = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+            return date_obj.strftime("%B %d, %Y")
+        except ValueError:
+            return date_str  # Return original if parsing fails
+    
+    def _format_event_type(self, event_type: str) -> str:
+        """Format event type codes into readable text"""
+        if not event_type:
+            return "Unknown Event Type"
+        
+        # Map common event type codes
+        type_mappings = {
+            "M": "Device Malfunction",
+            "I": "Patient Injury", 
+            "D": "Patient Death",
+            "MI": "Device Malfunction with Injury",
+            "MD": "Device Malfunction with Death",
+            "ID": "Injury Leading to Death"
+        }
+        
+        # Check for exact matches first
+        if event_type in type_mappings:
+            return type_mappings[event_type]
+        
+        # Check for combinations
+        formatted_types = []
+        if "M" in event_type:
+            formatted_types.append("Malfunction")
+        if "I" in event_type:
+            formatted_types.append("Injury")
+        if "D" in event_type:
+            formatted_types.append("Death")
+        
+        if formatted_types:
+            return " & ".join(formatted_types)
+        
+        return f"Event Type: {event_type}"
+
+    def _generate_fda_url(self, report_number: str, search_terms: str = "") -> str:
+        """Generate FDA MAUDE database URL for a specific report or search"""
+        if not report_number or report_number == "Not Available" or report_number.startswith("DEMO"):
+            # If no specific report number or demo data, create a general search URL
+            if search_terms and search_terms != "Device Not Specified":
+                # Use the main MAUDE search interface
+                import urllib.parse
+                encoded_search = urllib.parse.quote(search_terms.replace('"', ''))
+                return f"https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm"
+            else:
+                return "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm"
+        
+        # For specific reports, use the general search interface since direct report URLs may be restricted
+        return "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm"
+    
+    def _generate_device_search_url(self, device_name: str) -> str:
+        """Generate FDA MAUDE search URL for a specific device"""
+        if device_name and device_name != "Device Not Specified":
+            # Use the main MAUDE search interface - users can manually search for the device
+            return "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm"
+        return "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfmaude/search.cfm"
+    
+    def _generate_openfda_api_url(self, device_name: str) -> str:
+        """Generate openFDA API URL for device information"""
+        if device_name and device_name != "Device Not Specified":
+            import urllib.parse
+            encoded_device = urllib.parse.quote(device_name.replace('"', ''))
+            return f"https://open.fda.gov/apis/device/event/search?search=device.generic_name:{encoded_device}"
+        return "https://open.fda.gov/apis/device/event/"
+        """Format date from YYYYMMDD to readable format"""
+        if not date_str or len(date_str) < 8:
+            return "Date Not Available"
+        
+        try:
+            # Parse YYYYMMDD format
+            year = date_str[:4]
+            month = date_str[4:6]
+            day = date_str[6:8]
+            
+            # Create readable date
+            date_obj = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+            return date_obj.strftime("%B %d, %Y")
+        except ValueError:
+            return date_str  # Return original if parsing fails
+    
+    def _format_event_type(self, event_type: str) -> str:
+        """Format event type codes into readable text"""
+        if not event_type:
+            return "Unknown Event Type"
+        
+        # Map common event type codes
+        type_mappings = {
+            "M": "Device Malfunction",
+            "I": "Patient Injury", 
+            "D": "Patient Death",
+            "MI": "Device Malfunction with Injury",
+            "MD": "Device Malfunction with Death",
+            "ID": "Injury Leading to Death"
+        }
+        
+        # Check for exact matches first
+        if event_type in type_mappings:
+            return type_mappings[event_type]
+        
+        # Check for combinations
+        formatted_types = []
+        if "M" in event_type:
+            formatted_types.append("Malfunction")
+        if "I" in event_type:
+            formatted_types.append("Injury")
+        if "D" in event_type:
+            formatted_types.append("Death")
+        
+        if formatted_types:
+            return " & ".join(formatted_types)
+        
+        return f"Event Type: {event_type}"
         """Format a successful response"""
         return {
             "status": "success",

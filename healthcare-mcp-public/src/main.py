@@ -19,6 +19,7 @@ from src.tools.pubmed_tool import PubMedTool
 from src.tools.healthfinder_tool import HealthFinderTool
 from src.tools.clinical_trials_tool import ClinicalTrialsTool
 from src.tools.medical_terminology_tool import MedicalTerminologyTool
+from src.tools.surgical_trial_tool import SurgicalTrialTool  # NEW TOOL
 from src.services.usage_service import UsageService
 
 # Initialize tool instances and services
@@ -27,6 +28,7 @@ pubmed_tool = PubMedTool()
 healthfinder_tool = HealthFinderTool()
 clinical_trials_tool = ClinicalTrialsTool()
 medical_terminology_tool = MedicalTerminologyTool()
+surgical_trial_tool = SurgicalTrialTool()  # NEW TOOL INSTANCE
 usage_service = UsageService(db_path="healthcare_usage.db")
 
 # Generate a unique session ID for this connection
@@ -50,7 +52,7 @@ async def fda_device_lookup(ctx: Context, searchType: str, dateRange: int = 30, 
     device_params = {
         'searchType': searchType,
         'dateRange': dateRange,
-        'deviceName': deviceName,  # Changed from deviceModel
+        'deviceName': deviceName,
         'eventType': eventType
     }
     
@@ -71,7 +73,6 @@ async def fda_drug_lookup(ctx: Context, drug_name: str, search_type: str = "gene
     usage_service.record_usage(session_id, "fda_drug_lookup")
     
     # For backward compatibility, still call the old method if it exists
-    # This will need to be handled in your FDATool class
     try:
         if hasattr(fda_tool, 'lookup_drug'):
             return await fda_tool.lookup_drug(drug_name, search_type)
@@ -148,6 +149,105 @@ async def lookup_icd_code(ctx: Context, code: str = None, description: str = Non
     
     # Call the tool
     return await medical_terminology_tool.lookup_icd_code(code, description, max_results)
+
+# NEW SURGICAL TRIAL MONITORING TOOLS
+@mcp.tool()
+async def monitor_surgical_trials(ctx: Context, 
+                                device_category: str = None,
+                                competitor_companies: list = None,
+                                regions: list = None,
+                                time_period_days: int = 30,
+                                trial_phases: list = None):
+    """
+    Monitor surgical trials across global registries for competitive intelligence
+    
+    Args:
+        device_category: Category of medical device (e.g., 'cardiovascular', 'orthopedic', 'surgical_robotics')
+        competitor_companies: List of competitor company names to track
+        regions: List of regions to focus on (e.g., ['United States', 'European Union'])
+        time_period_days: Number of days to look back for new trials (default 30)
+        trial_phases: List of trial phases to include (e.g., ['Phase I', 'Phase II', 'Phase III'])
+    """
+    # Record usage
+    usage_service.record_usage(session_id, "monitor_surgical_trials")
+    
+    # Call the surgical trial monitoring tool
+    return await surgical_trial_tool.monitor_surgical_trials(
+        device_category=device_category,
+        competitor_companies=competitor_companies,
+        regions=regions,
+        time_period_days=time_period_days,
+        trial_phases=trial_phases
+    )
+
+@mcp.tool()
+async def get_competitive_dashboard(ctx: Context, 
+                                 company_name: str,
+                                 device_categories: list = None,
+                                 time_period_days: int = 90):
+    """
+    Get comprehensive competitive dashboard data for a medical device company
+    
+    Args:
+        company_name: Name of the company to analyze (e.g., 'Medtronic', 'Abbott')
+        device_categories: List of device categories to focus on (e.g., ['cardiovascular', 'orthopedic'])
+        time_period_days: Time period for analysis in days (default 90)
+    """
+    # Record usage
+    usage_service.record_usage(session_id, "get_competitive_dashboard")
+    
+    # Call the competitive dashboard tool
+    return await surgical_trial_tool.get_competitive_dashboard_data(
+        company_name=company_name,
+        device_categories=device_categories,
+        time_period_days=time_period_days
+    )
+
+@mcp.tool()
+async def track_competitor_activity(ctx: Context,
+                                  target_competitors: list,
+                                  device_category: str = None,
+                                  alert_threshold_days: int = 7):
+    """
+    Track specific competitor activity and generate alerts for new trial activities
+    
+    Args:
+        target_competitors: List of competitor names to specifically track
+        device_category: Specific device category to monitor (optional)
+        alert_threshold_days: Generate alerts for activity within this many days
+    """
+    # Record usage
+    usage_service.record_usage(session_id, "track_competitor_activity")
+    
+    # Call the competitor tracking tool
+    return await surgical_trial_tool.track_competitor_activity(
+        target_competitors=target_competitors,
+        device_category=device_category,
+        alert_threshold_days=alert_threshold_days
+    )
+
+@mcp.tool()
+async def analyze_market_trends(ctx: Context,
+                              device_category: str,
+                              time_period_days: int = 180,
+                              geographic_focus: list = None):
+    """
+    Analyze market trends and emerging patterns in surgical device trials
+    
+    Args:
+        device_category: Device category to analyze (e.g., 'cardiovascular', 'orthopedic')
+        time_period_days: Time period for trend analysis (default 180 days)
+        geographic_focus: List of regions to focus analysis on (optional)
+    """
+    # Record usage
+    usage_service.record_usage(session_id, "analyze_market_trends")
+    
+    # Call the market trends analysis tool
+    return await surgical_trial_tool.analyze_market_trends(
+        device_category=device_category,
+        time_period_days=time_period_days,
+        geographic_focus=geographic_focus
+    )
 
 @mcp.tool()
 async def get_usage_stats(ctx: Context):

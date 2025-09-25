@@ -1,6 +1,6 @@
 # Import tools
 import os
-from src.tools.fda_tool import FDATool
+from src.tools.fda_tool import FDATool  # Keep original name for compatibility
 from src.tools.pubmed_tool import PubMedTool
 
 # Set up data directory
@@ -13,9 +13,45 @@ fda_tool = FDATool(cache_db_path=cache_db_path)
 pubmed_tool = PubMedTool(cache_db_path=cache_db_path)
 
 # Define tool actions for registration
+fda_device_lookup = {
+    "name": "fda_device_lookup",
+    "description": "Look up device information from the FDA MAUDE database",
+    "parameters": [
+        {
+            "name": "searchType",
+            "description": "Type of search: 'adverse_events', 'recalls', or 'safety_signals'",
+            "required": True,
+            "type": "string"
+        },
+        {
+            "name": "dateRange",
+            "description": "Number of days to look back",
+            "required": False,
+            "type": "integer",
+            "default": 30
+        },
+        {
+            "name": "deviceModel",
+            "description": "Specific device model to search for",
+            "required": False,
+            "type": "string",
+            "default": None
+        },
+        {
+            "name": "eventType",
+            "description": "For adverse events: 'all', 'malfunction', 'injury', 'death'",
+            "required": False,
+            "type": "string",
+            "default": "all"
+        }
+    ],
+    "handler": fda_tool.lookup_device
+}
+
+# Keep the old drug lookup for backward compatibility
 fda_drug_lookup = {
     "name": "fda_drug_lookup",
-    "description": "Look up drug information from the FDA database",
+    "description": "Look up drug information from the FDA database (deprecated)",
     "parameters": [
         {
             "name": "drug_name",
@@ -31,7 +67,10 @@ fda_drug_lookup = {
             "default": "general"
         }
     ],
-    "handler": fda_tool.lookup_drug
+    "handler": lambda drug_name, search_type="general": {
+        "status": "error",
+        "error_message": "Drug lookup has been replaced with device monitoring. Use fda_device_lookup instead."
+    }
 }
 
 pubmed_search = {
@@ -64,6 +103,7 @@ pubmed_search = {
 
 # List of all tools for registration
 all_tools = [
-    fda_drug_lookup,
+    fda_device_lookup,  # New device lookup tool
+    fda_drug_lookup,    # Keep for backward compatibility
     pubmed_search
 ]
